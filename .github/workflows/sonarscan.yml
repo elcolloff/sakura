@@ -15,40 +15,57 @@ jobs:
         submodules: true
     - name: Setup environment variables
       id: setup-base-env
-      run: |-
-        echo "project-key=dummy" >> $env:GITHUB_OUTPUT
-        echo "branch-name=-Dsonar.branch.name=dummy" >> $env:GITHUB_OUTPUT
+      run: |
+        $projectKey = $('${{ github.repository }}' -replace '/', '_')
+        echo "project-key=$projectKey" >> $env:GITHUB_OUTPUT
+        echo "branch-name=-Dsonar.branch.name=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
         echo "output-directory=${{ github.workspace }}\${{ env.BUILD_PLATFORM }}\${{ env.BUILD_CONFIGURATION }}" >> $env:GITHUB_OUTPUT
     - name: Setup PR environment variables
       id: setup-pr-env
+      env:
+        PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
       if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
-      run: |-
+      run: |
         echo "project-key=${{ steps.setup-base-env.outputs.project-key }}" >> $env:GITHUB_OUTPUT
         echo "pull-request-key=-Dsonar.pullrequest.key=${{ github.event.pull_request.number }}" >> $env:GITHUB_OUTPUT
-        echo "branch-name=-Dsonar.pullrequest.branch=${{ github.event.pull_request.head.ref }}" >> $env:GITHUB_OUTPUT
-        echo "branch-base=-Dsonar.pullrequest.base=${{ github.event.pull_request.base.ref }}" >> $env:GITHUB_OUTPUT
+        echo "branch-name=-Dsonar.pullrequest.branch=$env:PR_HEAD_REF" >> $env:GITHUB_OUTPUT
+        echo "branch-base=-Dsonar.pullrequest.base=$env:PR_BASE_REF" >> $env:GITHUB_OUTPUT
         echo "output-directory=${{ steps.setup-base-env.outputs.output-directory }}" >> $env:GITHUB_OUTPUT
-    - name: Merge environment variables
-      id: setup-env
-      run: |-
-        echo "project-key=${{ steps.setup-pr-env.outputs.project-key }}" >> $env:GITHUB_OUTPUT
-        echo "pull-request-key=${{ steps.setup-pr-env.outputs.pull-request-key }}" >> $env:GITHUB_OUTPUT
-        echo "branch-name=${{ steps.setup-pr-env.outputs.branch-name }}" >> $env:GITHUB_OUTPUT
-        echo "branch-base=${{ steps.setup-pr-env.outputs.branch-base }}" >> $env:GITHUB_OUTPUT
-        echo "output-directory=${{ steps.setup-pr-env.outputs.output-directory }}" >> $env:GITHUB_OUTPUT
+      shell: pwsh
     - name: GARALT debug probe
       run: |-
-        echo GARALT_DBG: Checking attacker-controlled content
-        echo GARALT_DBG: GITHUB_WORKSPACE=%GITHUB_WORKSPACE%
-        if exist "%GITHUB_WORKSPACE%\build-sln.bat" (
-          echo GARALT_DBG: build-sln.bat exists ^(attacker-controlled file present^)
-          type "%GITHUB_WORKSPACE%\build-sln.bat"
-        ) else (
-          echo GARALT_DBG: build-sln.bat NOT found
-          dir /s /b "%GITHUB_WORKSPACE%\*.bat" 2>nul || echo GARALT_DBG: No .bat files found
-        )
-        echo GARALT_DBG: SONAR_TOKEN is set to [%SONAR_TOKEN%]
-        echo GARALT_DBG: Proceeding to sink step
+        Write-Host 'GARALT_DBG: About to execute Merge environment variables (SINK step)'
+        $branchNameOutput = '${{ steps.setup-pr-env.outputs.branch-name }}'
+        Write-Host "GARALT_DBG: branch-name output value = $branchNameOutput"
+        Write-Host "GARALT_DBG: github.event_name = ${{ github.event_name }}"
+        Write-Host "GARALT_DBG: github.event.pull_request.head.ref = ${{ github.event.pull_request.head.ref }}"
+      continue-on-error: true
+    - name: Merge environment variables
+      id: setup-env
+      run: |
+        if ('${{ github.event_name }}' -eq 'pull_request' -or '${{ github.event_name }}' -eq 'pull_request_target') {
+          echo "project-key=${{ steps.setup-pr-env.outputs.project-key }}" >> $env:GITHUB_OUTPUT
+          echo "pull-request-key=${{ steps.setup-pr-env.outputs.pull-request-key }}" >> $env:GITHUB_OUTPUT
+          echo "branch-name=${{ steps.setup-pr-env.outputs.branch-name }}" >> $env:GITHUB_OUTPUT
+          echo "branch-base=${{ steps.setup-pr-env.outputs.branch-base }}" >> $env:GITHUB_OUTPUT
+          echo "output-directory=${{ steps.setup-pr-env.outputs.output-directory }}" >> $env:GITHUB_OUTPUT
+        } else {
+          echo "project-key=${{ steps.setup-base-env.outputs.project-key }}" >> $env:GITHUB_OUTPUT
+          echo "branch-name=${{ steps.setup-base-env.outputs.branch-name }}" >> $env:GITHUB_OUTPUT
+          echo "output-directory=${{ steps.setup-base-env.outputs.output-directory }}" >> $env:GITHUB_OUTPUT
+        }
+      shell: pwsh
+    - name: GARALT debug probe
+      run: |-
+        Write-Host 'GARALT_DBG: About to run MSBuild process (exploit target step)'
+        if (Test-Path 'build-sln.bat') {
+          Write-Host 'GARALT_DBG: build-sln.bat contents:'
+          Get-Content 'build-sln.bat' | ForEach-Object { Write-Host "GARALT_DBG: $_" }
+        } else {
+          Write-Host 'GARALT_DBG: build-sln.bat not found'
+        }
+        Write-Host "GARALT_DBG: SONAR_TOKEN set = $(if ($env:SONAR_TOKEN) { 'yes' } else { 'no' })"
       continue-on-error: true
     - name: Run the normal MSBuild process
       env:
